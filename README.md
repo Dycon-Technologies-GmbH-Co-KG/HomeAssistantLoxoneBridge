@@ -195,7 +195,8 @@ data:
 
 - Name muss exakt `vi_<domain>_<entity_name>` lauten
 - Virtuelle Eingänge müssen in Loxone Config erstellt und gespeichert werden
-- Wenn Loxone für einen Virtual Input HTTP 403 oder 404 zurückgibt, wird dieser Eingang höchstens einmal pro Minute erneut angesprochen
+- Wenn Loxone für einen Virtual Input HTTP 403/404 oder `LL.Code` 403/404 zurückgibt, wird dieser Eingang höchstens einmal pro Minute erneut angesprochen
+- Ein Push gilt erst dann als erfolgreich, wenn die Loxone-Antwort `LL.Code = 200` enthält
 
 ### Webhook nicht erreichbar
 

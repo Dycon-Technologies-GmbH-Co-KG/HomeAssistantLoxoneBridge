@@ -84,6 +84,7 @@ class LoxoneBridge:
         self._queue_tasks: list[asyncio.Task] = []
         self._queue_sequence = 0
         self._queued_state_versions: dict[str, int] = {}
+        self._entity_push_locks: dict[str, asyncio.Lock] = {}
         self._miniserver_host = api.host
         self._miniserver_source_ips: set[_IpAddress] | None = None
         # Track 403/404 responses for missing Virtual Inputs without blocking forever.
@@ -215,10 +216,12 @@ class LoxoneBridge:
                 state = item["state"]
                 version = item["version"]
 
-                if version != self._queued_state_versions.get(entity_id):
-                    continue
+                lock = self._entity_push_locks.setdefault(entity_id, asyncio.Lock())
+                async with lock:
+                    if version != self._queued_state_versions.get(entity_id):
+                        continue
 
-                await self._push_state_to_loxone(entity_id, state)
+                    await self._push_state_to_loxone(entity_id, state)
             except Exception as err:
                 _LOGGER.error(
                     "Error processing HA→Loxone queue worker %d: %s",
@@ -274,16 +277,27 @@ class LoxoneBridge:
                     value,
                     vi_name,
                 )
-            elif result.status in (403, 404):
+            elif result.effective_status in (403, 404):
                 self._vi_not_found_retry_at[vi_name] = (
                     time.monotonic() + _VI_NOT_FOUND_RETRY_INTERVAL
                 )
                 _LOGGER.debug(
-                    "Loxone VI '%s' returned HTTP %s for %s; retrying in %.0f seconds",
+                    "Loxone VI '%s' returned code %s for %s; retrying in %.0f seconds",
                     vi_name,
-                    result.status,
+                    result.effective_status,
                     entity_id,
                     _VI_NOT_FOUND_RETRY_INTERVAL,
+                )
+            else:
+                _LOGGER.warning(
+                    "Failed to push %s = %s to Loxone VI '%s' "
+                    "(http_status=%s, loxone_code=%s, error=%s)",
+                    entity_id,
+                    value,
+                    vi_name,
+                    result.status,
+                    result.loxone_code,
+                    result.error,
                 )
         except Exception as err:
             _LOGGER.warning(

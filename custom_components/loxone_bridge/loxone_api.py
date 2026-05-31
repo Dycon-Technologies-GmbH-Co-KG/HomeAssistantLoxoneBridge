@@ -10,6 +10,7 @@ import logging
 import ssl
 import struct
 import time
+from urllib.parse import quote
 import uuid as uuid_module
 from typing import Any, Callable
 
@@ -32,6 +33,22 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _extract_loxone_code(data: dict[str, Any]) -> int | None:
+    """Extract the LL.Code value from a Loxone JSON response."""
+    ll = data.get("LL")
+    if not isinstance(ll, dict):
+        return None
+
+    code = ll.get("Code", ll.get("code"))
+    if code is None:
+        return None
+
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
 class LoxoneApiError(Exception):
     """Exception for Loxone API errors."""
 
@@ -41,13 +58,23 @@ class LoxoneHttpCommandResult:
     """Result of an HTTP command sent to Loxone."""
 
     status: int | None
+    loxone_code: int | None = None
     data: dict[str, Any] | None = None
     error: str | None = None
 
     @property
     def success(self) -> bool:
         """Return whether the command completed successfully."""
-        return self.status == 200 and self.data is not None
+        return (
+            self.status == 200
+            and self.loxone_code == 200
+            and self.data is not None
+        )
+
+    @property
+    def effective_status(self) -> int | None:
+        """Return the Loxone response code if available, else the HTTP status."""
+        return self.loxone_code if self.loxone_code is not None else self.status
 
 
 class LoxoneApi:
@@ -789,7 +816,10 @@ class LoxoneApi:
         timeout: float = 10,
     ) -> LoxoneHttpCommandResult:
         """Send a command via HTTPS and include the HTTP status in the result."""
-        url = f"{self._base_url}/jdev/sps/io/{uuid}/{command}"
+        url = (
+            f"{self._base_url}/jdev/sps/io/"
+            f"{quote(uuid, safe='')}/{quote(command, safe='')}"
+        )
         try:
             async with self._session.get(
                 url,
@@ -798,9 +828,32 @@ class LoxoneApi:
                 timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    loxone_code = _extract_loxone_code(data)
+                    if loxone_code == 200:
+                        return LoxoneHttpCommandResult(
+                            status=resp.status,
+                            loxone_code=loxone_code,
+                            data=data,
+                        )
+                    if loxone_code in (404, 403):
+                        _LOGGER.debug(
+                            "HTTP command %s/%s returned Loxone code %s",
+                            uuid,
+                            command,
+                            loxone_code,
+                        )
+                    else:
+                        _LOGGER.warning(
+                            "HTTP command %s/%s returned unexpected Loxone code %s",
+                            uuid,
+                            command,
+                            loxone_code,
+                        )
                     return LoxoneHttpCommandResult(
                         status=resp.status,
-                        data=await resp.json(content_type=None),
+                        loxone_code=loxone_code,
+                        data=data,
                     )
                 # 404/403 are expected when Virtual Input doesn't exist
                 if resp.status in (404, 403):
