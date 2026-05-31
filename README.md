@@ -13,7 +13,7 @@ Dieses Repository ist für die Veröffentlichung auf GitHub und für die Einbind
 | **Loxone → HA** | Alle Loxone-Steuerungen werden automatisch als HA-Entitäten erkannt (Lichter, Schalter, Jalousien, Sensoren, Klima) |
 | **HA → Loxone** | Alle HA-Entitäten werden automatisch an Loxone Virtuelle Eingänge gepusht |
 | **Loxone → HA (Webhook)** | Loxone kann über Virtuelle HTTPS-Ausgänge HA-Geräte steuern |
-| **🔒 Sicherheit** | HTTPS/WSS-Verschlüsselung standardmäßig, Credentials werden nie im Klartext übertragen |
+| **🔒 Sicherheit** | HTTPS/WSS standardmäßig, Webhook-Kommandos nur von der konfigurierten Miniserver-IP |
 
 ### Unterstützte Loxone-Steuerungen
 
@@ -59,7 +59,7 @@ Dieses Repository ist für die Veröffentlichung auf GitHub und für die Einbind
    - ✅ **HA → Loxone**: Pusht HA-Entity-States an Loxone Virtuelle Eingänge
    - ✅ **Loxone → HA**: Registriert Webhook für Loxone Virtuelle Ausgänge
 
-> **Hinweis Sicherheit:** Die Kommunikation läuft standardmäßig über HTTPS (Port 443) und WSS (WebSocket Secure). Benutzername und Passwort werden verschlüsselt übertragen und nie in Logs oder Events im Klartext ausgegeben. Da Loxone Miniserver selbstsignierte Zertifikate verwenden, ist die Zertifikatsprüfung standardmäßig deaktiviert – die Verschlüsselung ist dennoch aktiv.
+> **Hinweis Sicherheit:** Die Kommunikation läuft standardmäßig über HTTPS (Port 443) und WSS (WebSocket Secure). Benutzername und Passwort werden bei aktivem TLS verschlüsselt übertragen und nie in Logs oder Events im Klartext ausgegeben. Da Loxone Miniserver selbstsignierte Zertifikate verwenden, ist die Zertifikatsprüfung standardmäßig deaktiviert – die Verschlüsselung ist dennoch aktiv.
 
 ### 2. Loxone → Home Assistant (automatisch)
 
@@ -79,6 +79,8 @@ Damit Loxone HA-Entity-Zustände empfangen kann:
 ### 4. Loxone → Home Assistant steuern (Webhook)
 
 Loxone kann HA-Geräte über HTTP-Befehle steuern:
+
+Der Webhook akzeptiert Kommandos nur, wenn die Anfrage von der in der Integration konfigurierten Miniserver-Adresse kommt. Wenn Home Assistant hinter einem Reverse Proxy läuft, muss die Miniserver-Verbindung so eingerichtet sein, dass Home Assistant die echte Miniserver-IP als Quelladresse sieht.
 
 1. Webhook-URL abrufen:
    ```yaml

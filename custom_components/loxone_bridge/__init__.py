@@ -144,7 +144,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                     f"{DOMAIN}_webhook_url",
                     {"webhook_url": bridge.webhook_url},
                 )
-                _LOGGER.info("Webhook URL: %s", bridge.webhook_url)
+                _LOGGER.info("Webhook URL requested")
                 return
 
     async def handle_generate_loxone_config(call: ServiceCall) -> None:

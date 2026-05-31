@@ -7,8 +7,10 @@ This module handles:
 from __future__ import annotations
 
 import asyncio
+from ipaddress import IPv4Address, IPv6Address, ip_address
 import json
 import logging
+import socket
 import time
 from typing import Any
 
@@ -32,6 +34,8 @@ from .const import DOMAIN, WEBHOOK_ID
 from .loxone_api import LoxoneApi
 
 _LOGGER = logging.getLogger(__name__)
+
+_IpAddress = IPv4Address | IPv6Address
 
 # Default entity filter: sync everything except internal/noisy entities
 DEFAULT_EXCLUDE_DOMAINS = {
@@ -70,6 +74,8 @@ class LoxoneBridge:
         self._virtual_output_map: dict[str, str] = {}  # loxone cmd -> ha service call
         self._ha_to_loxone_queue: asyncio.Queue = asyncio.Queue()
         self._queue_task: asyncio.Task | None = None
+        self._miniserver_host = api.host
+        self._miniserver_source_ips: set[_IpAddress] | None = None
         # Track failed Virtual Input pushes to stop retrying non-existent VIs
         self._vi_failure_count: dict[str, int] = {}
         self._vi_blocked: set[str] = set()
@@ -256,9 +262,7 @@ class LoxoneBridge:
             self._webhook_id,
             self._handle_webhook,
         )
-        _LOGGER.info(
-            "Loxone → HA webhook registered: %s", self.webhook_url
-        )
+        _LOGGER.info("Loxone → HA webhook registered")
 
     async def _handle_webhook(
         self,
@@ -293,6 +297,9 @@ class LoxoneBridge:
         """
         from aiohttp import web
 
+        if not await self._is_request_from_miniserver(request):
+            return web.json_response({"error": "forbidden"}, status=403)
+
         try:
             body = await request.json()
         except (json.JSONDecodeError, Exception):
@@ -319,6 +326,117 @@ class LoxoneBridge:
             return web.json_response(
                 {"error": str(err)}, status=500
             )
+
+    async def _is_request_from_miniserver(self, request: Any) -> bool:
+        """Return True if the webhook request originates from the Miniserver."""
+        remote_ip = self._get_request_remote_ip(request)
+        if remote_ip is None:
+            _LOGGER.warning("Rejected Loxone webhook without a source IP")
+            return False
+
+        allowed_ips = await self._get_miniserver_source_ips()
+        if remote_ip in allowed_ips:
+            return True
+
+        # Hostnames may resolve to a different address after DHCP/DNS changes.
+        if self._parse_ip_address(self._miniserver_host) is None:
+            allowed_ips = await self._get_miniserver_source_ips(refresh=True)
+            if remote_ip in allowed_ips:
+                return True
+
+        _LOGGER.warning(
+            "Rejected Loxone webhook from %s; expected Miniserver host %s",
+            remote_ip,
+            self._miniserver_host,
+        )
+        return False
+
+    async def _get_miniserver_source_ips(
+        self,
+        *,
+        refresh: bool = False,
+    ) -> set[_IpAddress]:
+        """Return normalized IP addresses for the configured Miniserver host."""
+        if self._miniserver_source_ips is not None and not refresh:
+            return self._miniserver_source_ips
+
+        self._miniserver_source_ips = await self._resolve_miniserver_source_ips()
+        return self._miniserver_source_ips
+
+    async def _resolve_miniserver_source_ips(self) -> set[_IpAddress]:
+        """Resolve the configured Miniserver host to allowed source IPs."""
+        host = self._miniserver_host.strip()
+        lookup_host = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+        configured_ip = self._parse_ip_address(lookup_host)
+        if configured_ip is not None:
+            return {configured_ip}
+
+        try:
+            addr_infos = await self.hass.async_add_executor_job(
+                socket.getaddrinfo,
+                lookup_host,
+                None,
+                socket.AF_UNSPEC,
+                socket.SOCK_STREAM,
+            )
+        except socket.gaierror as err:
+            _LOGGER.error(
+                "Cannot resolve configured Loxone Miniserver host '%s': %s",
+                host,
+                err,
+            )
+            return set()
+
+        resolved_ips: set[_IpAddress] = set()
+        for addr_info in addr_infos:
+            sockaddr = addr_info[4]
+            if not sockaddr:
+                continue
+            resolved_ip = self._parse_ip_address(sockaddr[0])
+            if resolved_ip is not None:
+                resolved_ips.add(resolved_ip)
+
+        if not resolved_ips:
+            _LOGGER.error(
+                "Configured Loxone Miniserver host '%s' did not resolve to an IP",
+                host,
+            )
+
+        return resolved_ips
+
+    @staticmethod
+    def _get_request_remote_ip(request: Any) -> _IpAddress | None:
+        """Return the normalized remote IP address reported by Home Assistant."""
+        remote = getattr(request, "remote", None)
+        remote_ip = LoxoneBridge._parse_ip_address(remote)
+        if remote_ip is not None:
+            return remote_ip
+
+        transport = getattr(request, "transport", None)
+        if transport is None:
+            return None
+
+        peername = transport.get_extra_info("peername")
+        if not peername:
+            return None
+
+        return LoxoneBridge._parse_ip_address(peername[0])
+
+    @staticmethod
+    def _parse_ip_address(value: Any) -> _IpAddress | None:
+        """Parse and normalize an IP address string."""
+        if not isinstance(value, str) or not value:
+            return None
+
+        try:
+            parsed_ip = ip_address(value.split("%", 1)[0])
+        except ValueError:
+            return None
+
+        if isinstance(parsed_ip, IPv6Address) and parsed_ip.ipv4_mapped:
+            return parsed_ip.ipv4_mapped
+
+        return parsed_ip
 
     async def _execute_ha_command(self, command: dict) -> dict:
         """Execute a single HA command from Loxone."""

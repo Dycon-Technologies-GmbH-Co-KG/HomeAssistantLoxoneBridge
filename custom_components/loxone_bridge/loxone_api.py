@@ -346,18 +346,15 @@ class LoxoneApi:
 
             _LOGGER.debug(
                 "getkey2 WS response: hashAlg=%s key_len=%d "
-                "static_salt_present=%s onetimesalt_present=%s raw=%s",
+                "static_salt_present=%s onetimesalt_present=%s",
                 hash_alg,
                 len(key_hex),
                 bool(static_salt),
                 bool(one_time_salt),
-                str(value)[:300],
             )
 
             if not key_hex or not static_salt:
-                _LOGGER.warning(
-                    "Missing key or static salt in getkey2 response: %s", value
-                )
+                _LOGGER.warning("Missing key or static salt in getkey2 response")
                 return False
 
             # Step 2 – compute hash using the static salt
@@ -402,10 +399,8 @@ class LoxoneApi:
 
             _LOGGER.error(
                 "Loxone WS authentication failed (code=%s). "
-                "Check username/password in the integration options. "
-                "Full LL response: %s",
+                "Check username/password in the integration options.",
                 code,
-                str(token_ll)[:500],
             )
             return False
 
