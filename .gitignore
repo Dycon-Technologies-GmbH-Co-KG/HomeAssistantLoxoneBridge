@@ -1,0 +1,20 @@
+# Visual Studio local project/workspace files
+.vs/
+*.sln
+*.slnx
+*.pyproj
+*.pyproj.user
+*.suo
+*.user
+*.rsuser
+*.sdf
+*.VC.db
+HomeAssistantLoxoneBridge/
+
+# Python caches and local environments
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/

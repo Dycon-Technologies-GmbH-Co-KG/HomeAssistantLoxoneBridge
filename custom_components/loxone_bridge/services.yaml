@@ -1,0 +1,26 @@
+send_command:
+  name: Send Loxone Command
+  description: Send a command to a Loxone control by UUID.
+  fields:
+    uuid:
+      name: UUID
+      description: The UUID of the Loxone control.
+      required: true
+      example: "0f3c1a2b-0012-4fed-ffff-aabbccddeeff"
+      selector:
+        text:
+    command:
+      name: Command
+      description: The command to send (e.g., "on", "off", "pulse", "50").
+      required: true
+      example: "on"
+      selector:
+        text:
+
+get_webhook_url:
+  name: Get Webhook URL
+  description: Get the webhook URL for Loxone → HA communication. The URL is fired as an event.
+
+generate_loxone_config:
+  name: Generate Loxone Config
+  description: Generate Virtual Input/Output configuration suggestions for Loxone Config. Results are fired as an event.

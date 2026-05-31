@@ -1,0 +1,13 @@
+{
+  "domain": "loxone_bridge",
+  "name": "Loxone Bridge",
+  "codeowners": ["@dschulzDyconTech"],
+  "config_flow": true,
+  "dependencies": ["webhook"],
+  "documentation": "https://github.com/Dycon-Technologies-GmbH-Co-KG/HomeAssistantLoxoneBridge#readme",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/Dycon-Technologies-GmbH-Co-KG/HomeAssistantLoxoneBridge/issues",
+  "requirements": ["aiohttp>=3.8.0", "certifi>=2023.0.0"],
+  "version": "1.0.0"
+}

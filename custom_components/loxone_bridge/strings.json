@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Loxone Miniserver",
+        "description": "Enter the connection details for your Loxone Miniserver. HTTPS is enabled by default for secure communication.",
+        "data": {
+          "host": "Host / IP Address",
+          "port": "Port",
+          "username": "Username",
+          "password": "Password",
+          "use_tls": "Use HTTPS/TLS (recommended)",
+          "verify_ssl": "Verify SSL certificate (disable for self-signed)",
+          "sync_ha_to_loxone": "Sync HA entities → Loxone (Virtual Inputs)",
+          "sync_loxone_to_ha": "Sync Loxone → HA (Webhook for Virtual Outputs)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to Loxone Miniserver",
+      "invalid_auth": "Invalid username or password",
+      "ssl_error": "SSL certificate verification failed. Try disabling SSL verification for self-signed certificates.",
+      "timeout": "Connection timed out",
+      "unknown": "Unknown error occurred"
+    },
+    "abort": {
+      "already_configured": "This Miniserver is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Loxone Bridge Options",
+        "data": {
+          "sync_ha_to_loxone": "Sync HA entities → Loxone (Virtual Inputs)",
+          "sync_loxone_to_ha": "Sync Loxone → HA (Webhook for Virtual Outputs)"
+        }
+      }
+    }
+  }
+}

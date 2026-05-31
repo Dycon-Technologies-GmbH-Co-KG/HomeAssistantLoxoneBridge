@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Loxone Miniserver",
+        "description": "Geben Sie die Verbindungsdaten Ihres Loxone Miniservers ein. HTTPS ist standardmäßig für sichere Kommunikation aktiviert.",
+        "data": {
+          "host": "Host / IP-Adresse",
+          "port": "Port",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "use_tls": "HTTPS/TLS verwenden (empfohlen)",
+          "verify_ssl": "SSL-Zertifikat prüfen (für selbstsignierte deaktivieren)",
+          "sync_ha_to_loxone": "HA-Geräte → Loxone synchronisieren (Virtuelle Eingänge)",
+          "sync_loxone_to_ha": "Loxone → HA synchronisieren (Webhook für Virtuelle Ausgänge)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung zum Loxone Miniserver nicht möglich",
+      "invalid_auth": "Ungültiger Benutzername oder Passwort",
+      "ssl_error": "SSL-Zertifikatsprüfung fehlgeschlagen. Versuchen Sie, die SSL-Prüfung für selbstsignierte Zertifikate zu deaktivieren.",
+      "timeout": "Zeitüberschreitung bei der Verbindung",
+      "unknown": "Unbekannter Fehler aufgetreten"
+    },
+    "abort": {
+      "already_configured": "Dieser Miniserver ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Loxone Bridge Optionen",
+        "data": {
+          "sync_ha_to_loxone": "HA-Geräte → Loxone synchronisieren (Virtuelle Eingänge)",
+          "sync_loxone_to_ha": "Loxone → HA synchronisieren (Webhook für Virtuelle Ausgänge)"
+        }
+      }
+    }
+  }
+}
