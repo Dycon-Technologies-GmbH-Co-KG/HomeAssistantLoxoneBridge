@@ -76,7 +76,7 @@ Damit Loxone HA-Entity-Zustände empfangen kann:
 
 **Beispiel:** Für `sensor.outdoor_temperature` erstelle einen Virtuellen Eingang namens `vi_sensor_outdoor_temperature` in Loxone Config.
 
-Für HA-Schalter (`switch.*`) einen digitalen Virtuellen Eingang bzw. Virtuellen Eingang Schalter verwenden. Die Integration sendet dafür `On`/`Off` und überträgt beim Start zusätzlich den aktuellen Zustand, damit Loxone nicht erst auf die nächste Zustandsänderung warten muss.
+Für HA-Schalter (`switch.*`) einen digitalen Virtuellen Eingang bzw. Virtuellen Eingang Schalter verwenden. Die Integration sendet dafür `On`/`Off` und überträgt beim Start zusätzlich den aktuellen Zustand, damit Loxone nicht erst auf die nächste Zustandsänderung warten muss. Live-Änderungen werden gegenüber dem Initial-Sync priorisiert.
 
 ### 4. Loxone → Home Assistant steuern (Webhook)
 
@@ -195,6 +195,7 @@ data:
 
 - Name muss exakt `vi_<domain>_<entity_name>` lauten
 - Virtuelle Eingänge müssen in Loxone Config erstellt und gespeichert werden
+- Wenn Loxone für einen Virtual Input HTTP 403 oder 404 zurückgibt, wird dieser Eingang höchstens einmal pro Minute erneut angesprochen
 
 ### Webhook nicht erreichbar
 

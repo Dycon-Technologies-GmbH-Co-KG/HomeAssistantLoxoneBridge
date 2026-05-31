@@ -45,10 +45,16 @@ DEFAULT_EXCLUDE_DOMAINS = {
     "loxone_bridge",  # Prevent feedback loops
 }
 
-# Stop retrying a Virtual Input after this many consecutive failures
-_MAX_VI_FAILURES = 3
 # Minimum seconds between pushes for the same entity
 _MIN_PUSH_INTERVAL = 2.0
+# Minimum seconds between retries after Loxone returned 403/404 for a VI.
+_VI_NOT_FOUND_RETRY_INTERVAL = 60.0
+# Process live state changes before the slower initial snapshot.
+_STATE_CHANGE_PRIORITY = 0
+_INITIAL_STATE_PRIORITY = 10
+# Keep Loxone VI updates responsive; the Miniserver is expected to be local.
+_VI_UPDATE_TIMEOUT = 3.0
+_HA_TO_LOXONE_WORKERS = 4
 
 
 class LoxoneBridge:
@@ -72,13 +78,16 @@ class LoxoneBridge:
         self._webhook_id = f"{WEBHOOK_ID}_{entry_id[:8]}"
         self._virtual_input_map: dict[str, str] = {}  # ha entity_id -> loxone vi name
         self._virtual_output_map: dict[str, str] = {}  # loxone cmd -> ha service call
-        self._ha_to_loxone_queue: asyncio.Queue = asyncio.Queue()
-        self._queue_task: asyncio.Task | None = None
+        self._ha_to_loxone_queue: asyncio.PriorityQueue[
+            tuple[int, int, dict[str, Any]]
+        ] = asyncio.PriorityQueue()
+        self._queue_tasks: list[asyncio.Task] = []
+        self._queue_sequence = 0
+        self._queued_state_versions: dict[str, int] = {}
         self._miniserver_host = api.host
         self._miniserver_source_ips: set[_IpAddress] | None = None
-        # Track failed Virtual Input pushes to stop retrying non-existent VIs
-        self._vi_failure_count: dict[str, int] = {}
-        self._vi_blocked: set[str] = set()
+        # Track 403/404 responses for missing Virtual Inputs without blocking forever.
+        self._vi_not_found_retry_at: dict[str, float] = {}
         # Rate-limit: last push timestamp per entity
         self._last_push_time: dict[str, float] = {}
         self._last_pushed_values: dict[str, str | float] = {}
@@ -110,12 +119,11 @@ class LoxoneBridge:
             self._state_listener()
             self._state_listener = None
 
-        if self._queue_task and not self._queue_task.done():
-            self._queue_task.cancel()
-            try:
-                await self._queue_task
-            except asyncio.CancelledError:
-                pass
+        for task in self._queue_tasks:
+            task.cancel()
+        if self._queue_tasks:
+            await asyncio.gather(*self._queue_tasks, return_exceptions=True)
+            self._queue_tasks.clear()
 
         try:
             async_unregister(self.hass, self._webhook_id)
@@ -133,7 +141,10 @@ class LoxoneBridge:
         self._state_listener = self.hass.bus.async_listen(
             EVENT_STATE_CHANGED, self._on_ha_state_changed
         )
-        self._queue_task = asyncio.ensure_future(self._process_ha_to_loxone_queue())
+        self._queue_tasks = [
+            asyncio.ensure_future(self._process_ha_to_loxone_queue(worker_id))
+            for worker_id in range(_HA_TO_LOXONE_WORKERS)
+        ]
         self._queue_current_ha_states()
         _LOGGER.debug("HA → Loxone sync started")
 
@@ -143,20 +154,34 @@ class LoxoneBridge:
         entity_id = event.data.get("entity_id", "")
         new_state = event.data.get("new_state")
 
-        self._queue_ha_state_for_sync(entity_id, new_state)
+        self._queue_ha_state_for_sync(
+            entity_id,
+            new_state,
+            priority=_STATE_CHANGE_PRIORITY,
+        )
 
     @callback
     def _queue_current_ha_states(self) -> None:
         """Queue the current HA states so Loxone gets an initial snapshot."""
         queued = 0
         for state in self.hass.states.async_all():
-            if self._queue_ha_state_for_sync(state.entity_id, state):
+            if self._queue_ha_state_for_sync(
+                state.entity_id,
+                state,
+                priority=_INITIAL_STATE_PRIORITY,
+            ):
                 queued += 1
 
         _LOGGER.debug("Queued %d current HA states for Loxone sync", queued)
 
     @callback
-    def _queue_ha_state_for_sync(self, entity_id: str, state: Any) -> bool:
+    def _queue_ha_state_for_sync(
+        self,
+        entity_id: str,
+        state: Any,
+        *,
+        priority: int,
+    ) -> bool:
         """Queue an HA state for Loxone sync when it is syncable."""
         if not state or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return False
@@ -168,25 +193,40 @@ class LoxoneBridge:
         if state.attributes.get("loxone_uuid"):
             return False
 
+        self._queue_sequence += 1
+        version = self._queued_state_versions.get(entity_id, 0) + 1
+        self._queued_state_versions[entity_id] = version
         self._ha_to_loxone_queue.put_nowait(
-            {"entity_id": entity_id, "state": state}
+            (
+                priority,
+                self._queue_sequence,
+                {"entity_id": entity_id, "state": state, "version": version},
+            )
         )
         return True
 
-    async def _process_ha_to_loxone_queue(self) -> None:
+    async def _process_ha_to_loxone_queue(self, worker_id: int) -> None:
         """Process queued HA state changes and push to Loxone."""
         while True:
+            queue_item = await self._ha_to_loxone_queue.get()
             try:
-                item = await self._ha_to_loxone_queue.get()
+                _, _, item = queue_item
                 entity_id = item["entity_id"]
                 state = item["state"]
+                version = item["version"]
+
+                if version != self._queued_state_versions.get(entity_id):
+                    continue
 
                 await self._push_state_to_loxone(entity_id, state)
-                self._ha_to_loxone_queue.task_done()
-            except asyncio.CancelledError:
-                break
             except Exception as err:
-                _LOGGER.error("Error processing HA→Loxone queue: %s", err)
+                _LOGGER.error(
+                    "Error processing HA→Loxone queue worker %d: %s",
+                    worker_id,
+                    err,
+                )
+            finally:
+                self._ha_to_loxone_queue.task_done()
 
     async def _push_state_to_loxone(self, entity_id: str, state: Any) -> None:
         """Push an HA entity state to Loxone via Virtual HTTPS Input.
@@ -199,16 +239,18 @@ class LoxoneBridge:
         """
         vi_name = self._get_virtual_input_name(entity_id)
 
-        # Skip entities whose VI has been permanently blocked (doesn't exist)
-        if vi_name in self._vi_blocked:
+        now = time.monotonic()
+        retry_at = self._vi_not_found_retry_at.get(vi_name)
+        if retry_at is not None and now < retry_at:
             return
+        if retry_at is not None:
+            self._vi_not_found_retry_at.pop(vi_name, None)
 
         value = self._convert_ha_state_to_loxone(entity_id, state)
         if value is None:
             return
 
         # Rate-limit repeated identical values, but never suppress a changed state.
-        now = time.monotonic()
         last = self._last_push_time.get(entity_id, 0.0)
         if (
             now - last < _MIN_PUSH_INTERVAL
@@ -217,23 +259,32 @@ class LoxoneBridge:
             return
 
         try:
-            result = await self.api.async_send_http_command(vi_name, str(value))
-            if result is not None:
-                self._last_push_time[entity_id] = now
+            result = await self.api.async_send_http_command_result(
+                vi_name,
+                str(value),
+                timeout=_VI_UPDATE_TIMEOUT,
+            )
+            if result.success:
+                self._last_push_time[entity_id] = time.monotonic()
                 self._last_pushed_values[entity_id] = value
-                # Reset failure count on success
-                self._vi_failure_count.pop(vi_name, None)
-                _LOGGER.debug("Pushed %s = %s to Loxone VI '%s'", entity_id, value, vi_name)
-            else:
-                # Track failures; block after N consecutive failures
-                count = self._vi_failure_count.get(vi_name, 0) + 1
-                self._vi_failure_count[vi_name] = count
-                if count >= _MAX_VI_FAILURES:
-                    self._vi_blocked.add(vi_name)
-                    _LOGGER.info(
-                        "Blocking VI '%s' after %d failures (entity %s)",
-                        vi_name, count, entity_id,
-                    )
+                self._vi_not_found_retry_at.pop(vi_name, None)
+                _LOGGER.debug(
+                    "Pushed %s = %s to Loxone VI '%s'",
+                    entity_id,
+                    value,
+                    vi_name,
+                )
+            elif result.status in (403, 404):
+                self._vi_not_found_retry_at[vi_name] = (
+                    time.monotonic() + _VI_NOT_FOUND_RETRY_INTERVAL
+                )
+                _LOGGER.debug(
+                    "Loxone VI '%s' returned HTTP %s for %s; retrying in %.0f seconds",
+                    vi_name,
+                    result.status,
+                    entity_id,
+                    _VI_NOT_FOUND_RETRY_INTERVAL,
+                )
         except Exception as err:
             _LOGGER.warning(
                 "Failed to push %s to Loxone VI '%s': %s",

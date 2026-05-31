@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import hashlib
 import hmac as hmac_lib
 import json
@@ -33,6 +34,20 @@ _LOGGER = logging.getLogger(__name__)
 
 class LoxoneApiError(Exception):
     """Exception for Loxone API errors."""
+
+
+@dataclass(frozen=True, slots=True)
+class LoxoneHttpCommandResult:
+    """Result of an HTTP command sent to Loxone."""
+
+    status: int | None
+    data: dict[str, Any] | None = None
+    error: str | None = None
+
+    @property
+    def success(self) -> bool:
+        """Return whether the command completed successfully."""
+        return self.status == 200 and self.data is not None
 
 
 class LoxoneApi:
@@ -747,31 +762,60 @@ class LoxoneApi:
             _LOGGER.error("Failed to send command: %s", err)
             return False
 
-    async def async_send_http_command(self, uuid: str, command: str) -> dict | None:
+    async def async_send_http_command(
+        self,
+        uuid: str,
+        command: str,
+        *,
+        timeout: float = 10,
+    ) -> dict | None:
         """Send a command via HTTPS (fallback).
 
         Returns the response dict on success, None on failure.
         404/403 are expected for non-existent Virtual Inputs and logged at debug level.
         """
+        result = await self.async_send_http_command_result(
+            uuid,
+            command,
+            timeout=timeout,
+        )
+        return result.data if result.success else None
+
+    async def async_send_http_command_result(
+        self,
+        uuid: str,
+        command: str,
+        *,
+        timeout: float = 10,
+    ) -> LoxoneHttpCommandResult:
+        """Send a command via HTTPS and include the HTTP status in the result."""
         url = f"{self._base_url}/jdev/sps/io/{uuid}/{command}"
         try:
             async with self._session.get(
                 url,
                 auth=self._auth,
                 ssl=self._ssl_param,
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=timeout),
             ) as resp:
                 if resp.status == 200:
-                    return await resp.json(content_type=None)
+                    return LoxoneHttpCommandResult(
+                        status=resp.status,
+                        data=await resp.json(content_type=None),
+                    )
                 # 404/403 are expected when Virtual Input doesn't exist
                 if resp.status in (404, 403):
                     _LOGGER.debug("HTTP command %s/%s: %s", uuid, command, resp.status)
                 else:
-                    _LOGGER.warning("HTTP command %s/%s failed: %s", uuid, command, resp.status)
-                return None
+                    _LOGGER.warning(
+                        "HTTP command %s/%s failed: %s",
+                        uuid,
+                        command,
+                        resp.status,
+                    )
+                return LoxoneHttpCommandResult(status=resp.status)
         except Exception as err:
             _LOGGER.debug("HTTP command error for %s: %s", uuid, type(err).__name__)
-            return None
+            return LoxoneHttpCommandResult(status=None, error=type(err).__name__)
 
     async def async_get_state(self, uuid: str) -> Any:
         """Get the current state of a control via HTTPS."""
