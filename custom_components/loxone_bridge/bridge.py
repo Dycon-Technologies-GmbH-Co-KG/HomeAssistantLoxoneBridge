@@ -81,6 +81,7 @@ class LoxoneBridge:
         self._vi_blocked: set[str] = set()
         # Rate-limit: last push timestamp per entity
         self._last_push_time: dict[str, float] = {}
+        self._last_pushed_values: dict[str, str | float] = {}
 
     @property
     def webhook_id(self) -> str:
@@ -133,6 +134,7 @@ class LoxoneBridge:
             EVENT_STATE_CHANGED, self._on_ha_state_changed
         )
         self._queue_task = asyncio.ensure_future(self._process_ha_to_loxone_queue())
+        self._queue_current_ha_states()
         _LOGGER.debug("HA → Loxone sync started")
 
     @callback
@@ -141,21 +143,35 @@ class LoxoneBridge:
         entity_id = event.data.get("entity_id", "")
         new_state = event.data.get("new_state")
 
-        if not new_state or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return
+        self._queue_ha_state_for_sync(entity_id, new_state)
 
-        # Skip internal domains
+    @callback
+    def _queue_current_ha_states(self) -> None:
+        """Queue the current HA states so Loxone gets an initial snapshot."""
+        queued = 0
+        for state in self.hass.states.async_all():
+            if self._queue_ha_state_for_sync(state.entity_id, state):
+                queued += 1
+
+        _LOGGER.debug("Queued %d current HA states for Loxone sync", queued)
+
+    @callback
+    def _queue_ha_state_for_sync(self, entity_id: str, state: Any) -> bool:
+        """Queue an HA state for Loxone sync when it is syncable."""
+        if not state or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return False
+
         domain = entity_id.split(".")[0]
         if domain in DEFAULT_EXCLUDE_DOMAINS:
-            return
+            return False
 
-        # Skip loxone_bridge entities to prevent loops
-        if new_state.attributes.get("loxone_uuid"):
-            return
+        if state.attributes.get("loxone_uuid"):
+            return False
 
         self._ha_to_loxone_queue.put_nowait(
-            {"entity_id": entity_id, "state": new_state}
+            {"entity_id": entity_id, "state": state}
         )
+        return True
 
     async def _process_ha_to_loxone_queue(self) -> None:
         """Process queued HA state changes and push to Loxone."""
@@ -187,20 +203,24 @@ class LoxoneBridge:
         if vi_name in self._vi_blocked:
             return
 
-        # Rate-limit: skip if pushed too recently
-        now = time.monotonic()
-        last = self._last_push_time.get(entity_id, 0.0)
-        if now - last < _MIN_PUSH_INTERVAL:
-            return
-
         value = self._convert_ha_state_to_loxone(entity_id, state)
         if value is None:
+            return
+
+        # Rate-limit repeated identical values, but never suppress a changed state.
+        now = time.monotonic()
+        last = self._last_push_time.get(entity_id, 0.0)
+        if (
+            now - last < _MIN_PUSH_INTERVAL
+            and self._last_pushed_values.get(entity_id) == value
+        ):
             return
 
         try:
             result = await self.api.async_send_http_command(vi_name, str(value))
             if result is not None:
                 self._last_push_time[entity_id] = now
+                self._last_pushed_values[entity_id] = value
                 # Reset failure count on success
                 self._vi_failure_count.pop(vi_name, None)
                 _LOGGER.debug("Pushed %s = %s to Loxone VI '%s'", entity_id, value, vi_name)
@@ -214,8 +234,13 @@ class LoxoneBridge:
                         "Blocking VI '%s' after %d failures (entity %s)",
                         vi_name, count, entity_id,
                     )
-        except Exception:
-            pass  # Already logged inside async_send_http_command
+        except Exception as err:
+            _LOGGER.warning(
+                "Failed to push %s to Loxone VI '%s': %s",
+                entity_id,
+                vi_name,
+                err,
+            )
 
     def _get_virtual_input_name(self, entity_id: str) -> str:
         """Get the Loxone Virtual Input name for an HA entity."""
@@ -229,6 +254,12 @@ class LoxoneBridge:
         """Convert HA state to a Loxone-compatible value."""
         state_value = state.state
         domain = entity_id.split(".")[0]
+
+        if domain == "switch":
+            if state_value == STATE_ON:
+                return "On"
+            if state_value == STATE_OFF:
+                return "Off"
 
         # Binary states
         if state_value in (STATE_ON, "on", "home", "open", "detected", "True"):
