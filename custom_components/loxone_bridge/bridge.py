@@ -91,7 +91,7 @@ class LoxoneBridge:
         self._vi_not_found_retry_at: dict[str, float] = {}
         # Rate-limit: last push timestamp per entity
         self._last_push_time: dict[str, float] = {}
-        self._last_pushed_values: dict[str, str | float] = {}
+        self._last_pushed_values: dict[str, str | int | float] = {}
 
     @property
     def webhook_id(self) -> str:
@@ -187,11 +187,7 @@ class LoxoneBridge:
         if not state or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return False
 
-        domain = entity_id.split(".")[0]
-        if domain in DEFAULT_EXCLUDE_DOMAINS:
-            return False
-
-        if state.attributes.get("loxone_uuid"):
+        if not self._is_state_syncable(entity_id, state):
             return False
 
         self._queue_sequence += 1
@@ -206,6 +202,17 @@ class LoxoneBridge:
         )
         return True
 
+    def _is_state_syncable(self, entity_id: str, state: Any) -> bool:
+        """Return whether a Home Assistant state should be synced to Loxone."""
+        if not state or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return False
+
+        domain = entity_id.split(".")[0]
+        if domain in DEFAULT_EXCLUDE_DOMAINS:
+            return False
+
+        return not state.attributes.get("loxone_uuid")
+
     async def _process_ha_to_loxone_queue(self, worker_id: int) -> None:
         """Process queued HA state changes and push to Loxone."""
         while True:
@@ -219,6 +226,9 @@ class LoxoneBridge:
                 lock = self._entity_push_locks.setdefault(entity_id, asyncio.Lock())
                 async with lock:
                     if version != self._queued_state_versions.get(entity_id):
+                        continue
+
+                    if not self._is_state_syncable(entity_id, state):
                         continue
 
                     await self._push_state_to_loxone(entity_id, state)
@@ -315,16 +325,19 @@ class LoxoneBridge:
         return f"vi_{entity_id.replace('.', '_')}"
 
     @staticmethod
-    def _convert_ha_state_to_loxone(entity_id: str, state: Any) -> str | float | None:
+    def _convert_ha_state_to_loxone(
+        entity_id: str,
+        state: Any,
+    ) -> str | int | float | None:
         """Convert HA state to a Loxone-compatible value."""
         state_value = state.state
         domain = entity_id.split(".")[0]
 
         if domain == "switch":
             if state_value == STATE_ON:
-                return "On"
+                return 1
             if state_value == STATE_OFF:
-                return "Off"
+                return 0
 
         # Binary states
         if state_value in (STATE_ON, "on", "home", "open", "detected", "True"):
