@@ -157,8 +157,8 @@ async def _async_register_services(hass: HomeAssistant) -> None:
                 hass.bus.async_fire(
                     f"{DOMAIN}_config",
                     {
-                        "virtual_inputs": vi_config[:50],  # Limit for event size
-                        "virtual_outputs": vo_config[:50],
+                        "virtual_inputs": vi_config,  # Limit for event size
+                        "virtual_outputs": vo_config,
                         "total_inputs": len(vi_config),
                         "total_outputs": len(vo_config),
                     },
