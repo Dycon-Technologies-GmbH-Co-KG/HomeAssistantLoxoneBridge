@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 import aiohttp
+from aiohttp.hdrs import METH_GET, METH_POST, METH_PUT
 from homeassistant.components.webhook import (
     async_generate_url,
     async_register,
@@ -55,6 +56,7 @@ _INITIAL_STATE_PRIORITY = 10
 # Keep Loxone VI updates responsive; the Miniserver is expected to be local.
 _VI_UPDATE_TIMEOUT = 3.0
 _HA_TO_LOXONE_WORKERS = 4
+_WEBHOOK_ALLOWED_METHODS = (METH_GET, METH_POST, METH_PUT)
 
 
 class LoxoneBridge:
@@ -370,8 +372,12 @@ class LoxoneBridge:
             f"Loxone Bridge ({self._entry_id[:8]})",
             self._webhook_id,
             self._handle_webhook,
+            allowed_methods=_WEBHOOK_ALLOWED_METHODS,
         )
-        _LOGGER.info("Loxone → HA webhook registered")
+        _LOGGER.info(
+            "Loxone → HA webhook registered for methods: %s",
+            ", ".join(_WEBHOOK_ALLOWED_METHODS),
+        )
 
     async def _handle_webhook(
         self,
@@ -410,10 +416,9 @@ class LoxoneBridge:
             return web.json_response({"error": "forbidden"}, status=403)
 
         try:
-            body = await request.json()
-        except (json.JSONDecodeError, Exception):
-            # Try query parameters as fallback
-            body = dict(request.query)
+            body = await self._get_webhook_payload(request)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
 
         _LOGGER.debug("Webhook received: %s", body)
 
@@ -435,6 +440,32 @@ class LoxoneBridge:
             return web.json_response(
                 {"error": str(err)}, status=500
             )
+
+    async def _get_webhook_payload(self, request: Any) -> dict[str, Any]:
+        """Read webhook data from JSON/form body and query parameters."""
+        query_data = dict(request.query)
+        body_data: dict[str, Any] = {}
+
+        if getattr(request, "can_read_body", False):
+            content_type = getattr(request, "content_type", "")
+
+            if content_type in (
+                "application/x-www-form-urlencoded",
+                "multipart/form-data",
+            ):
+                body_data = dict(await request.post())
+            else:
+                try:
+                    json_data = await request.json()
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    json_data = None
+
+                if json_data is not None:
+                    if not isinstance(json_data, dict):
+                        raise ValueError("Webhook JSON body must be an object")
+                    body_data = json_data
+
+        return {**query_data, **body_data}
 
     async def _is_request_from_miniserver(self, request: Any) -> bool:
         """Return True if the webhook request originates from the Miniserver."""
@@ -553,6 +584,18 @@ class LoxoneBridge:
         action = command.get("action", command.get("service"))
         state = command.get("state")
         data = command.get("data", {})
+
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError:
+                return {"error": "data must be a JSON object", "entity_id": entity_id}
+
+        if data is None:
+            data = {}
+
+        if not isinstance(data, dict):
+            return {"error": "data must be a JSON object", "entity_id": entity_id}
 
         if not entity_id:
             return {"error": "entity_id required"}

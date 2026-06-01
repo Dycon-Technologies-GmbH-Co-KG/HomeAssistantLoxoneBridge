@@ -84,6 +84,10 @@ Loxone kann HA-Geräte über HTTP-Befehle steuern:
 
 Der Webhook akzeptiert Kommandos nur, wenn die Anfrage von der in der Integration konfigurierten Miniserver-Adresse kommt. Wenn Home Assistant hinter einem Reverse Proxy läuft, muss die Miniserver-Verbindung so eingerichtet sein, dass Home Assistant die echte Miniserver-IP als Quelladresse sieht.
 
+Der Bridge-Webhook akzeptiert `GET`, `POST` und `PUT`. Query-Parameter werden bei
+allen Methoden ausgewertet; JSON- oder Form-Body-Daten können zusätzlich gesendet
+werden und überschreiben gleichnamige Query-Parameter.
+
 1. Webhook-URL abrufen:
    ```yaml
    # In HA Developer Tools → Services:
@@ -202,6 +206,12 @@ data:
 
 - Home Assistant muss von Loxone aus erreichbar sein (gleiches Netzwerk)
 - Webhook-URL prüfen via Service `loxone_bridge.get_webhook_url`
+- Nach einem Update Home Assistant neu starten oder die Integration neu laden, damit
+  die Webhook-Methoden neu registriert werden
+- Ein HTTP `200` bei `GET` beweist nicht, dass der Bridge-Webhook verarbeitet wurde:
+  Home Assistant antwortet auch bei unbekannten Webhook-IDs mit `200`
+- Ein HTTP `405` weist auf eine URL hin, deren Webhook andere `allowed_methods`
+  registriert hat, oder auf eine noch nicht neu geladene Integration
 
 ### Logs aktivieren
 
